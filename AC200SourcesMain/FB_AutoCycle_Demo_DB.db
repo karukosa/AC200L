@@ -1,0 +1,10 @@
+﻿DATA_BLOCK "FB_AutoCycle_Demo_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+"FB_AutoCycle_Demo"
+
+BEGIN
+
+END_DATA_BLOCK
+

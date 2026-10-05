@@ -1,0 +1,131 @@
+﻿FUNCTION "FC_OutputControl" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.5
+   VAR_TEMP 
+      Common_OK : Bool;
+      Heater_OK : Bool;
+      DoorPressureSafe : Bool;
+      AnyManualOutput : Bool;
+      AnyAutoOutput : Bool;
+      ManualMode : Bool;
+      AutoMode : Bool;
+   END_VAR
+
+
+BEGIN
+	// DO_PilotValve_04,05,06,07 and DO_WaterDrain control NO valves
+	
+	#ManualMode := "HMI_Mode_Manual" AND NOT "HMI_Mode_Auto";
+	#AutoMode := "HMI_Mode_Auto" AND NOT "HMI_Mode_Manual";
+	
+	#Common_OK := "DI_EStop_Chain_OK" AND "DI_Phase_OK";
+	#Heater_OK := #Common_OK
+	AND "DI_Tank_Level_OK"
+	AND "DI_SG_Level_High"
+	AND NOT "DI_SGPress_High"
+	AND NOT "SIG_SGFillTimeout";
+	
+	#DoorPressureSafe := ("HMI_ChamberPressure_com" >= -0.10)
+	AND ("HMI_ChamberPressure_com" <= 0.10);
+	
+	"DO_Heater1" := #Heater_OK
+	AND ((#ManualMode AND "MAN_Q_Heater1")
+	OR (#AutoMode AND "AUTO_Q_Heater1")
+	OR (NOT "HMI_Mode_Manual" AND "FB_SGStartupFill_DB".HeatRequest));
+	"DO_Heater2" := #Heater_OK
+	AND ((#ManualMode AND "MAN_Q_Heater2")
+	OR (#AutoMode AND "AUTO_Q_Heater2")
+	OR (NOT "HMI_Mode_Manual" AND "FB_SGStartupFill_DB".HeatRequest ));
+	"DO_Heater3" := #Heater_OK
+	AND ((#ManualMode AND "MAN_Q_Heater3")
+	OR (#AutoMode AND "AUTO_Q_Heater3")
+	OR (NOT "HMI_Mode_Manual" AND "FB_SGStartupFill_DB".HeatRequest3));
+	
+	"DO_WaterPump" := #Common_OK
+	AND "DI_Tank_Level_OK"
+	AND "DI_WaterPump_OL_OK"
+	AND (("FB_SGStartupFill_DB".FillRequest)
+	OR (#ManualMode AND "MAN_Q_WaterPump")
+	OR (#AutoMode AND "AUTO_Q_WaterPump"));
+	"DO_VacuumPump" := #Common_OK
+	AND "DI_VacuumPump_OL_OK"
+	AND ((#ManualMode AND "MAN_Q_VacuumPump")
+	OR (#AutoMode AND "AUTO_Q_VacuumPump"));
+	
+	"DO_PilotValve_01" := #Common_OK
+	AND ((#ManualMode AND "MAN_Q_PilotValve_01")
+	OR (#AutoMode AND "AUTO_Q_PilotValve_01"));
+	"DO_PilotValve_02" := #Common_OK
+	AND ((#ManualMode AND "MAN_Q_PilotValve_02")
+	OR (#AutoMode AND "AUTO_Q_PilotValve_02"));
+	"DO_PilotValve_03" := #Common_OK
+	AND ((#ManualMode AND "MAN_Q_PilotValve_03")
+	OR (#AutoMode AND "AUTO_Q_PilotValve_03"));
+	
+	"DO_PilotValve_04" := #Common_OK
+	AND NOT ((#ManualMode AND "MAN_Q_PilotValve_04")
+	OR (#AutoMode AND "AUTO_Q_PilotValve_04"));
+	"DO_PilotValve_05" := #Common_OK
+	AND NOT ((#ManualMode AND "MAN_Q_PilotValve_05")
+	OR (#AutoMode AND "AUTO_Q_PilotValve_05"));
+	"DO_PilotValve_06" := #Common_OK
+	AND NOT ((#ManualMode AND "MAN_Q_PilotValve_06")
+	OR (#AutoMode AND "AUTO_Q_PilotValve_06"));
+	"DO_PilotValve_07" := #Common_OK
+	AND NOT ((#ManualMode AND "MAN_Q_PilotValve_07")
+	OR (#AutoMode AND "AUTO_Q_PilotValve_07"));
+	
+	"DO_PilotValve_08" := #Common_OK
+	AND ((#ManualMode AND "MAN_Q_PilotValve_08")
+	OR (#AutoMode AND "AUTO_Q_PilotValve_08"));
+	
+	"DO_WaterInlet_01" := #Common_OK
+	AND ((#ManualMode AND "MAN_Q_WaterInlet_01")
+	OR (#AutoMode AND "AUTO_Q_WaterInlet_01"));
+	"DO_WaterInlet_02" := #Common_OK
+	AND ((#ManualMode AND "MAN_Q_WaterInlet_02")
+	OR (#AutoMode AND "AUTO_Q_WaterInlet_02")
+	OR (NOT "HMI_Mode_Manual" AND "FB_SGStartupFill_DB".FillRequest));
+	"DO_WaterDrain" := #Common_OK
+	AND NOT ((#ManualMode AND "MAN_Q_WaterDrain")
+	OR (#AutoMode AND "AUTO_Q_WaterDrain"));
+	
+	"DO_Door1_Open" := "FB_DoorControl_DB".Door1OpenCmd;
+	"DO_Door1_Close" := "FB_DoorControl_DB".Door1CloseCmd;
+	"DO_Door2_Open" := "FB_DoorControl_DB".Door2OpenCmd;
+	"DO_Door2_Close" := "FB_DoorControl_DB".Door2CloseCmd;
+	
+	"DO_Buzzer" :="HMI_Sts_BuzzerRequest"
+	OR (#ManualMode AND "MAN_Q_Buzzer")
+	OR (#AutoMode AND "AUTO_Q_Buzzer");
+	
+	#AnyManualOutput := "MAN_Q_Heater1" OR "MAN_Q_Heater2" OR "MAN_Q_Heater3"
+	OR "MAN_Q_WaterPump" OR "MAN_Q_VacuumPump"
+	OR "MAN_Q_PilotValve_01" OR "MAN_Q_PilotValve_02"
+	OR "MAN_Q_PilotValve_03" OR "MAN_Q_PilotValve_04"
+	OR "MAN_Q_PilotValve_05" OR "MAN_Q_PilotValve_06"
+	OR "MAN_Q_PilotValve_07" OR "MAN_Q_PilotValve_08"
+	OR "MAN_Q_WaterInlet_01" OR "MAN_Q_WaterInlet_02"
+	OR "MAN_Q_WaterDrain";
+	#AnyAutoOutput := "AUTO_Q_Heater1" OR "AUTO_Q_Heater2" OR "AUTO_Q_Heater3"
+	OR "AUTO_Q_WaterPump" OR "AUTO_Q_VacuumPump"
+	OR "AUTO_Q_PilotValve_01" OR "AUTO_Q_PilotValve_02"
+	OR "AUTO_Q_PilotValve_03" OR "AUTO_Q_PilotValve_04"
+	OR "AUTO_Q_PilotValve_05" OR "AUTO_Q_PilotValve_06"
+	OR "AUTO_Q_PilotValve_07" OR "AUTO_Q_PilotValve_08"
+	OR "AUTO_Q_WaterInlet_01" OR "AUTO_Q_WaterInlet_02"
+	OR "AUTO_Q_WaterDrain";
+	
+	"DO_LampRun" := (#ManualMode AND #AnyManualOutput)
+	OR (#AutoMode AND ("HMI_Sts_CycleRunning" OR #AnyAutoOutput));
+	
+	"DO_LampError" :="HMI_Sts_LampErrorRequest"
+	OR ("HMI_Mode_Manual" AND "HMI_Mode_Auto")
+	OR NOT "DI_EStop_Chain_OK"
+	OR NOT "DI_Phase_OK";
+	
+	"DO_LampDoor1" := "DI_Door1_Closed";
+	"DO_LampDoor2" := "DI_Door2_Closed";
+	
+END_FUNCTION
+

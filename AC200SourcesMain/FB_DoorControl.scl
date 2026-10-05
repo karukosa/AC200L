@@ -1,0 +1,80 @@
+﻿FUNCTION_BLOCK "FB_DoorControl"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.2
+// AC200L - two-door hold-to-run control. Call every scan before FC_OutputControl.
+// This FB does not own the alarm word, alarm acknowledgement or event history.
+   VAR_INPUT 
+      EStopOK : Bool;
+      PhaseOK : Bool;
+      CycleActive : Bool;   //  TRUE from accepted Start through preparation/end
+      Door1Closed : Bool;
+      Door2Closed : Bool;
+      GasketPressHigh : Bool;
+      Pressure1_bar : Real;
+      Pressure2_bar : Real;
+      Door1OpenPB : Bool;
+      Door1ClosePB : Bool;
+      Door2OpenPB : Bool;
+      Door2ClosePB : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      Door1OpenCmd : Bool;
+      Door1CloseCmd : Bool;
+      Door2OpenCmd : Bool;
+      Door2CloseCmd : Bool;
+      Door1OpenBlocked : Bool;   //  Level TRUE while blocked Open1 PB is held
+      Door2OpenBlocked : Bool;   //  Level TRUE while blocked Open2 PB is held
+      DoorCommandBlocked : Bool;   //  Any actionable door command rejected
+      DoorFaultDuringRun : Bool;   //  Door-closed feedback lost during cycle
+   END_VAR
+
+   VAR_TEMP 
+      PressureSafe : Bool;
+      Conflict : Bool;
+      Close1Blocked : Bool;
+      Close2Blocked : Bool;
+   END_VAR
+
+
+BEGIN
+	    // Sensor diagnostics are handled by the separate alarm block.
+	    // Both measured chamber pressures must be near atmospheric pressure.
+	    #PressureSafe := (#Pressure1_bar >= -0.15)
+	    AND (#Pressure1_bar <= 0.15)
+	    AND (#Pressure2_bar >= -0.15)
+	    AND (#Pressure2_bar <= 0.15);
+	    
+	    // Deny contradictory directions and simultaneous movement of both doors.
+	    #Conflict := (#Door1OpenPB AND #Door1ClosePB)
+	    OR (#Door2OpenPB AND #Door2ClosePB)
+	    OR ((#Door1OpenPB OR #Door1ClosePB)
+	    AND (#Door2OpenPB OR #Door2ClosePB));
+	    
+	    #Door1OpenCmd := #EStopOK AND #PhaseOK AND NOT #CycleActive
+	    AND NOT #Conflict AND #Door1OpenPB
+	    AND #Door2Closed AND NOT #GasketPressHigh
+	    AND #PressureSafe;
+	    #Door2OpenCmd := #EStopOK AND #PhaseOK AND NOT #CycleActive
+	    AND NOT #Conflict AND #Door2OpenPB
+	    AND #Door1Closed AND NOT #GasketPressHigh
+	    AND #PressureSafe;
+	    
+	    // A door may be closed even when the other door is still open.
+	    #Door1CloseCmd := #EStopOK AND #PhaseOK AND NOT #CycleActive
+	    AND NOT #Conflict AND #Door1ClosePB AND NOT #Door1Closed;
+	    #Door2CloseCmd := #EStopOK AND #PhaseOK AND NOT #CycleActive
+	    AND NOT #Conflict AND #Door2ClosePB AND NOT #Door2Closed;
+	    
+	    // These are status signals. FB_AlarmDirect decides whether/how to warn,
+	    // latch, acknowledge and log them; this FB never writes HMI_AlarmWord.
+	    #Door1OpenBlocked := #Door1OpenPB AND NOT #Door1OpenCmd;
+	    #Door2OpenBlocked := #Door2OpenPB AND NOT #Door2OpenCmd;
+	    #Close1Blocked := #Door1ClosePB AND NOT #Door1CloseCmd AND NOT #Door1Closed;
+	    #Close2Blocked := #Door2ClosePB AND NOT #Door2CloseCmd AND NOT #Door2Closed;
+	    #DoorCommandBlocked := #Door1OpenBlocked OR #Door2OpenBlocked
+	    OR #Close1Blocked OR #Close2Blocked;
+	    #DoorFaultDuringRun := #CycleActive
+	    AND (NOT #Door1Closed OR NOT #Door2Closed);
+END_FUNCTION_BLOCK
+

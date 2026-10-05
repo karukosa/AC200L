@@ -1,0 +1,77 @@
+﻿FUNCTION_BLOCK "FB_StartPrecheck"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.4
+   VAR_INPUT 
+      AutoMode : Bool;
+      Door1Closed : Bool;
+      Door2Closed : Bool;
+      PhaseOK : Bool;
+      EStopChainOK : Bool;
+      SGLevelHigh : Bool;
+      SGPressHigh : Bool;
+      TankLevelOK : Bool;
+      ManualTestActive : Bool;
+      CycleRunning : Bool;
+      ErrorActive : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      ReadyToStart : Bool;
+      StartAccepted : Bool;
+      StartBlocked : Bool;
+      BlockReason : Int;
+   END_VAR
+
+   VAR_IN_OUT 
+      HMI_Cmd_Start : Bool;
+   END_VAR
+
+
+BEGIN
+	    // All green indicators must be TRUE before a cycle can start.
+	    #ReadyToStart := #AutoMode
+	    AND NOT #ManualTestActive
+	    AND #EStopChainOK AND #PhaseOK
+	    AND #Door1Closed AND #Door2Closed
+	    AND #TankLevelOK AND #SGLevelHigh AND #SGPressHigh
+	    AND NOT #CycleRunning AND NOT #ErrorActive;
+	    
+	    // Output a one-scan pulse to the auto cycle only after a valid press.
+	    #StartAccepted := FALSE;
+	    
+	    // HMI sets HMI_Cmd_Start ONCE on press; PLC clears it after reading.
+	    IF #HMI_Cmd_Start THEN
+	        #HMI_Cmd_Start := FALSE;
+	        
+	        IF #ReadyToStart THEN
+	            #StartAccepted := TRUE;
+	            #StartBlocked := FALSE;
+	            #BlockReason := 0;
+	        ELSE
+	            #StartBlocked := TRUE;
+	            
+	            IF NOT #AutoMode OR #ManualTestActive THEN
+	                #BlockReason := 9; // Auto mode unavailable / Manual Test active
+	            ELSIF NOT #EStopChainOK THEN
+	                #BlockReason := 1;
+	            ELSIF NOT #PhaseOK THEN
+	                #BlockReason := 2;
+	            ELSIF NOT #Door1Closed THEN
+	                #BlockReason := 3;
+	            ELSIF NOT #Door2Closed THEN
+	                #BlockReason := 4;
+	            ELSIF NOT #TankLevelOK THEN
+	                #BlockReason := 5;
+	            ELSIF NOT #SGLevelHigh THEN
+	                #BlockReason := 6;
+	            ELSIF NOT #SGPressHigh THEN
+	                #BlockReason := 7;
+	            ELSIF #CycleRunning THEN
+	                #BlockReason := 12;
+	            ELSIF #ErrorActive THEN
+	                #BlockReason := 10;
+	            END_IF;
+	        END_IF;
+	    END_IF;
+END_FUNCTION_BLOCK
+

@@ -1,0 +1,10 @@
+﻿DATA_BLOCK "FB_SGStartupFill_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.5
+NON_RETAIN
+"FB_SGStartupFill"
+
+BEGIN
+
+END_DATA_BLOCK
+

@@ -1,0 +1,154 @@
+﻿FUNCTION_BLOCK "FB_ManualTest"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.4
+   VAR_INPUT 
+      Enable : Bool;
+      EStop_OK : Bool;
+      Phase_OK : Bool;
+      SG_Level_High : Bool;
+      WaterPump_OL_OK : Bool;
+      VacuumPump_OL_OK : Bool;
+      Cmd_Heater1 : Bool;
+      Cmd_Heater2 : Bool;
+      Cmd_Heater3 : Bool;
+      Cmd_WaterPump : Bool;
+      Cmd_VacuumPump : Bool;
+      Cmd_PilotValve_01 : Bool;
+      Cmd_PilotValve_02 : Bool;
+      Cmd_PilotValve_03 : Bool;
+      Cmd_PilotValve_04 : Bool;
+      Cmd_PilotValve_05 : Bool;
+      Cmd_PilotValve_06 : Bool;
+      Cmd_PilotValve_07 : Bool;
+      Cmd_PilotValve_08 : Bool;
+      Cmd_WaterInlet_01 : Bool;
+      Cmd_WaterInlet_02 : Bool;
+      Cmd_WaterDrain : Bool;
+      Cmd_Buzzer : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      Manual_Ready : Bool;
+      Any_Command : Bool;
+      Any_Output : Bool;
+      Command_Blocked : Bool;
+      MoreThanOneCommand : Bool;
+      Safety_Trip : Bool;
+      Q_Heater1 : Bool;
+      Q_Heater2 : Bool;
+      Q_Heater3 : Bool;
+      Q_WaterPump : Bool;
+      Q_VacuumPump : Bool;
+      Q_PilotValve_01 : Bool;
+      Q_PilotValve_02 : Bool;
+      Q_PilotValve_03 : Bool;
+      Q_PilotValve_04 : Bool;
+      Q_PilotValve_05 : Bool;
+      Q_PilotValve_06 : Bool;
+      Q_PilotValve_07 : Bool;
+      Q_PilotValve_08 : Bool;
+      Q_WaterInlet_01 : Bool;
+      Q_WaterInlet_02 : Bool;
+      Q_WaterDrain : Bool;
+      Q_Buzzer : Bool;
+   END_VAR
+
+   VAR_TEMP 
+      CommandCount : Int;
+      TestPermit : Bool;
+   END_VAR
+
+
+BEGIN
+	
+	#CommandCount := 0;
+	IF #Cmd_Heater1 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_Heater2 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_Heater3 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_WaterPump THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_VacuumPump THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_PilotValve_01 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_PilotValve_02 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_PilotValve_03 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_PilotValve_04 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_PilotValve_05 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_PilotValve_06 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_PilotValve_07 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_PilotValve_08 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_WaterInlet_01 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_WaterInlet_02 THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_WaterDrain THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	IF #Cmd_Buzzer THEN
+	    #CommandCount := #CommandCount + 1;
+	END_IF;
+	#Any_Command := #CommandCount > 0;
+	#MoreThanOneCommand := #CommandCount > 1;
+	#Manual_Ready := #Enable AND #EStop_OK AND #Phase_OK;
+	#Safety_Trip := #Enable AND (NOT #EStop_OK OR NOT #Phase_OK);
+	#TestPermit := #Manual_Ready;
+	#Q_Heater1 := #TestPermit AND #Cmd_Heater1
+	AND #SG_Level_High;
+	#Q_Heater2 := #TestPermit AND #Cmd_Heater2
+	AND #SG_Level_High;
+	#Q_Heater3 := #TestPermit AND #Cmd_Heater3
+	AND #SG_Level_High;
+	#Q_WaterPump := #TestPermit AND #Cmd_WaterPump
+	AND #WaterPump_OL_OK;
+	#Q_VacuumPump := #TestPermit AND #Cmd_VacuumPump
+	AND #VacuumPump_OL_OK;
+	#Q_PilotValve_01 := #TestPermit AND #Cmd_PilotValve_01;
+	#Q_PilotValve_02 := #TestPermit AND #Cmd_PilotValve_02;
+	#Q_PilotValve_03 := #TestPermit AND #Cmd_PilotValve_03;
+	#Q_PilotValve_04 := #TestPermit AND #Cmd_PilotValve_04;
+	#Q_PilotValve_05 := #TestPermit AND #Cmd_PilotValve_05;
+	#Q_PilotValve_06 := #TestPermit AND #Cmd_PilotValve_06;
+	#Q_PilotValve_07 := #TestPermit AND #Cmd_PilotValve_07;
+	#Q_PilotValve_08 := #TestPermit AND #Cmd_PilotValve_08;
+	#Q_WaterInlet_01 := #TestPermit AND #Cmd_WaterInlet_01;
+	#Q_WaterInlet_02 := #TestPermit AND #Cmd_WaterInlet_02;
+	#Q_WaterDrain := #TestPermit AND #Cmd_WaterDrain;
+	#Q_Buzzer := #TestPermit AND #Cmd_Buzzer;
+	#Any_Output := #Q_Heater1 OR #Q_Heater2 OR #Q_Heater3
+	OR #Q_WaterPump OR #Q_VacuumPump
+	OR #Q_PilotValve_01 OR #Q_PilotValve_02
+	OR #Q_PilotValve_03 OR #Q_PilotValve_04
+	OR #Q_PilotValve_05 OR #Q_PilotValve_06
+	OR #Q_PilotValve_07 OR #Q_PilotValve_08
+	OR #Q_WaterInlet_01 OR #Q_WaterInlet_02
+	OR #Q_WaterDrain OR #Q_Buzzer;
+	#Command_Blocked := #Enable AND #Any_Command AND NOT #Any_Output;
+	
+END_FUNCTION_BLOCK
+

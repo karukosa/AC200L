@@ -1,0 +1,86 @@
+﻿FUNCTION_BLOCK "FB_SGStartupFill"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.5
+   VAR_INPUT 
+      Enable : Bool;
+      ManualTestActive : Bool;
+      SGLevelHigh : Bool;
+      SGPressHigh : Bool;
+      TankLevelOK : Bool;
+      WaterPumpOLOK : Bool;
+      EStopChainOK : Bool;
+      PhaseOK : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      FillRequest : Bool;
+      HeatRequest : Bool;
+      SteamReady : Bool;
+      FillTimeoutFault : Bool;
+      FillElapsed : Time;
+      HeatRequest3 : Bool;
+   END_VAR
+
+   VAR 
+      FillTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      FirstHeatDone { S7_SetPoint := 'True'} : Bool;
+   END_VAR
+
+   VAR_TEMP 
+      RunAuto : Bool;
+   END_VAR
+
+
+BEGIN
+	    #RunAuto := #Enable AND NOT #ManualTestActive;
+	    
+	    // The 5-minute window starts when the controller enables filling
+	    // with the steam generator below its high-level probe.
+	    // An empty supply tank does not pause this window.
+	    #FillTimer(IN := #RunAuto AND NOT #SGLevelHigh AND NOT #FillTimeoutFault,
+	               PT := T#5m,
+	               ET => #FillElapsed);
+	    
+	    IF #FillTimer.Q THEN
+	        #FillTimeoutFault := TRUE;
+	    END_IF;
+	    
+	    // Clear the timeout only after the generator reaches the high level.
+	    // Manual Test can be used to fill it after a timeout.
+	    IF #SGLevelHigh THEN
+	        #FillTimeoutFault := FALSE;
+	    END_IF;
+	    
+	    #FillRequest := #RunAuto
+	    AND #EStopChainOK
+	    AND #PhaseOK
+	    AND #TankLevelOK
+	    AND #WaterPumpOLOK
+	    AND NOT #SGLevelHigh
+	    AND NOT #FillTimeoutFault;
+	    
+	    // Preheat ends when the high steam pressure switch first operates.
+	    // A later pressure drop must not automatically restart startup heating.
+	    IF NOT #RunAuto AND NOT #SGPressHigh THEN
+	        #SteamReady := FALSE;
+	    ELSIF #SGPressHigh AND #SGLevelHigh THEN
+	        #SteamReady := TRUE;
+	    END_IF;
+	    
+	    // If the high-level probe drops, heating stops and filling resumes.
+	    IF #RunAuto AND #SGLevelHigh AND #SGPressHigh THEN
+	        #FirstHeatDone := TRUE;
+	    END_IF;
+	    
+	    #HeatRequest := #RunAuto
+	    AND #EStopChainOK
+	    AND #PhaseOK
+	    AND #TankLevelOK
+	    AND #SGLevelHigh
+	    AND NOT #SGPressHigh
+	    AND NOT #FillTimeoutFault;
+	    
+	    #HeatRequest3 := #HeatRequest AND NOT #FirstHeatDone;
+	    
+END_FUNCTION_BLOCK
+

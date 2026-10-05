@@ -1,0 +1,145 @@
+﻿FUNCTION "FC_ProgramSelect" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.4
+   VAR_INPUT 
+      P1_Temp_C : Int;
+      P1_Sterilize_min : Int;
+      P1_DryEnable : Bool;
+      P1_Dry_min : Int;
+      P2_Temp_C : Int;
+      P2_Sterilize_min : Int;
+      P2_DryEnable : Bool;
+      P2_Dry_min : Int;
+      P3_Temp_C : Int;
+      P3_Sterilize_min : Int;
+      P3_DryEnable : Bool;
+      P3_Dry_min : Int;
+      P4_Temp_C : Int;
+      P4_Sterilize_min : Int;
+      P4_DryEnable : Bool;
+      P4_Dry_min : Int;
+      P5_Temp_C : Int;
+      P5_Sterilize_min : Int;
+      P5_DryEnable : Bool;
+      P5_Dry_min : Int;   //  HMI writes 1..5=recipe, 6=User, 7=Confirm User, 8=Cancel. The FC clears this command to zero after handling it.
+   END_VAR
+
+   VAR_IN_OUT 
+      HMI_Command : Int;
+      HMI_UserTemp_C : Int;
+      HMI_UserSterilize_min : Int;
+      HMI_UserDryEnable : Bool;
+      HMI_UserDry_min : Int;   //  Persistent PLC tags / DB fields. Read these in the cycle block.
+      SP_Temp_C : Real;
+      SP_Sterilize_min : Int;
+      SP_DryEnable : Bool;
+      SP_Dry_min : Int;
+      HMI_SelectedProgram : Int;
+   END_VAR
+
+   VAR_TEMP 
+      Temp_C : Int;
+      Sterilize_min : Int;
+      DryEnable : Bool;
+      Dry_min : Int;
+   END_VAR
+
+
+BEGIN
+	    // Write clamped values back into the same HMI tags. Input fields
+	    // will show the corrected value after the PLC/HMI refresh.
+	    IF #HMI_UserTemp_C < 110 THEN
+	        #HMI_UserTemp_C := 110;
+	    ELSIF #HMI_UserTemp_C > 134 THEN
+	        #HMI_UserTemp_C := 134;
+	    END_IF;
+	    
+	    IF #HMI_UserSterilize_min < 1 THEN
+	        #HMI_UserSterilize_min := 1;
+	    ELSIF #HMI_UserSterilize_min > 99 THEN
+	        #HMI_UserSterilize_min := 99;
+	    END_IF;
+	    
+	    IF #HMI_UserDry_min < 0 THEN
+	        #HMI_UserDry_min := 0;
+	    ELSIF #HMI_UserDry_min > 99 THEN
+	        #HMI_UserDry_min := 99;
+	    END_IF;
+	    
+	    IF (#HMI_Command >= 1) AND (#HMI_Command <= 5) THEN
+	        CASE #HMI_Command OF
+	            1:
+	                #Temp_C := #P1_Temp_C;
+	                #Sterilize_min := #P1_Sterilize_min;
+	                #DryEnable := #P1_DryEnable;
+	                #Dry_min := #P1_Dry_min;
+	            2:
+	                #Temp_C := #P2_Temp_C;
+	                #Sterilize_min := #P2_Sterilize_min;
+	                #DryEnable := #P2_DryEnable;
+	                #Dry_min := #P2_Dry_min;
+	            3:
+	                #Temp_C := #P3_Temp_C;
+	                #Sterilize_min := #P3_Sterilize_min;
+	                #DryEnable := #P3_DryEnable;
+	                #Dry_min := #P3_Dry_min;
+	            4:
+	                #Temp_C := #P4_Temp_C;
+	                #Sterilize_min := #P4_Sterilize_min;
+	                #DryEnable := #P4_DryEnable;
+	                #Dry_min := #P4_Dry_min;
+	            5:
+	                #Temp_C := #P5_Temp_C;
+	                #Sterilize_min := #P5_Sterilize_min;
+	                #DryEnable := #P5_DryEnable;
+	                #Dry_min := #P5_Dry_min;
+	        END_CASE;
+	        
+	        IF (#Temp_C >= 110) AND (#Temp_C <= 134)
+	            AND (#Sterilize_min >= 1) AND (#Sterilize_min <= 99)
+	            AND (#Dry_min >= 0) AND (#Dry_min <= 99) THEN
+	            #SP_Temp_C := INT_TO_REAL(#Temp_C);
+	            #SP_Sterilize_min := #Sterilize_min;
+	            #SP_DryEnable := #DryEnable;
+	            IF #SP_DryEnable THEN
+	                #SP_Dry_min := #Dry_min;
+	            ELSE
+	                #SP_Dry_min := 0;
+	            END_IF;
+	        ELSE
+	            #SP_Temp_C := 0.0;
+	            #SP_Sterilize_min := 0;
+	            #SP_DryEnable := FALSE;
+	            #SP_Dry_min := 0;
+	        END_IF;
+	        
+	    ELSIF #HMI_Command = 6 THEN
+	        #SP_Temp_C := 0;
+	        #SP_Sterilize_min := 0;
+	        #SP_DryEnable := FALSE;
+	        #SP_Dry_min := 0;
+	        
+	    ELSIF #HMI_Command = 7 THEN
+	        #SP_Temp_C := INT_TO_REAL(#HMI_UserTemp_C);
+	        #SP_Sterilize_min := #HMI_UserSterilize_min;
+	        #SP_DryEnable := #HMI_UserDryEnable;
+	        
+	        IF #SP_DryEnable THEN
+	            #SP_Dry_min := #HMI_UserDry_min;
+	        ELSE
+	            #SP_Dry_min := 0;
+	        END_IF;
+	        
+	    ELSIF #HMI_Command = 8 THEN
+	        #SP_Temp_C := 0.0;
+	        #SP_Sterilize_min := 0;
+	        #SP_DryEnable := FALSE;
+	        #SP_Dry_min := 0;
+	    END_IF;
+	    
+	    IF #HMI_Command <> 0 THEN
+	        #HMI_SelectedProgram := #HMI_Command;
+	        #HMI_Command := 0;
+	    END_IF;
+END_FUNCTION
+

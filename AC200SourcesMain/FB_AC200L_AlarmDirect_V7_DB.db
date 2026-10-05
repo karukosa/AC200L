@@ -1,0 +1,10 @@
+﻿DATA_BLOCK "FB_AC200L_AlarmDirect_V7_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+"FB_AC200L_AlarmDirect_V7"
+
+BEGIN
+
+END_DATA_BLOCK
+

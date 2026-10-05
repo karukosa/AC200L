@@ -1,0 +1,10 @@
+﻿DATA_BLOCK "FB_ManualTest_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.4
+NON_RETAIN
+"FB_ManualTest"
+
+BEGIN
+
+END_DATA_BLOCK
+

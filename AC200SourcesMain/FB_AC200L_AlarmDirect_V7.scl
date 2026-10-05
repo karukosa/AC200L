@@ -1,0 +1,183 @@
+﻿FUNCTION_BLOCK "FB_AC200L_AlarmDirect_V7"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      DI_EStop_Chain_OK : Bool;
+      DI_Phase_OK : Bool;
+      DI_WaterPump_OL_OK : Bool;
+      DI_VacuumPump_OL_OK : Bool;
+      DI_Tank_Level_OK : Bool;
+      DI_Door1_Closed : Bool;
+      DI_Door2_Closed : Bool;
+      DI_Door1_Open_PB : Bool;
+      DI_Door2_Open_PB : Bool;
+      AI_Temperature_Raw : Int;
+      AI_ChamberPressure1_Raw : Int;
+      AI_ChamberPressure2_Raw : Int;
+      HMI_Temperature_PV : Real;
+      HMI_ChamberPressure_01_PV : Real;
+      HMI_ChamberPressure_02_PV : Real;
+      HMI_Cmd_Start : Bool;
+      HMI_Sts_CycleRunning : Bool;
+      SIG_GasketTimeout : Bool;
+      SIG_VacuumTimeout : Bool;
+      SIG_HeatingTimeout : Bool;
+      SIG_SterilizeTempLow : Bool;
+      SIG_SGFillTimeout : Bool;
+      SIG_ExhaustTimeout : Bool;
+      SIG_MaintenanceDue : Bool;
+      SIG_HMICommunicationFault : Bool;
+      SIG_PrinterFault : Bool;
+      SIG_PressureMismatch : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      AlarmErrorWord : Int;
+      AlarmWarningWord : Int;
+      ErrorActive : Bool;
+      WarningActive : Bool;
+      AlarmActive : Bool;
+      LampErrorRequest : Bool;
+      BuzzerRequest : Bool;
+   END_VAR
+
+   VAR_IN_OUT 
+      AlarmAckWord : Int;
+   END_VAR
+
+   VAR 
+      TankLowTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+   END_VAR
+
+   VAR_TEMP 
+      UnackError : Bool;
+   END_VAR
+
+
+BEGIN
+	    #AlarmErrorWord.%X0 := NOT #DI_EStop_Chain_OK;
+	    #AlarmErrorWord.%X1 := NOT #DI_Phase_OK;
+	    #AlarmErrorWord.%X2 := NOT #DI_WaterPump_OL_OK;
+	    #AlarmErrorWord.%X3 := NOT #DI_VacuumPump_OL_OK;
+	    #AlarmErrorWord.%X4 := #HMI_Temperature_PV > 138.0;
+	    
+	    #TankLowTimer(
+	                  IN := NOT #DI_Tank_Level_OK,
+	                  PT := T#15s
+	    );
+	    
+	    #AlarmErrorWord.%X5 := #TankLowTimer.Q;
+	    
+	    #AlarmErrorWord.%X6 := (#AI_Temperature_Raw < 0)
+	    OR (#AI_Temperature_Raw > 27648);
+	    
+	    #AlarmErrorWord.%X7 := (#AI_ChamberPressure1_Raw < 0)
+	    OR (#AI_ChamberPressure1_Raw > 27648);
+	    
+	    #AlarmErrorWord.%X8 := (#AI_ChamberPressure2_Raw < 0)
+	    OR (#AI_ChamberPressure2_Raw > 27648);
+	    
+	    #AlarmErrorWord.%X9 := #SIG_PressureMismatch;
+	    #AlarmErrorWord.%X10 := #SIG_GasketTimeout;
+	    #AlarmErrorWord.%X11 := #SIG_VacuumTimeout;
+	    #AlarmErrorWord.%X12 := #SIG_HeatingTimeout;
+	    #AlarmErrorWord.%X13 := #SIG_SterilizeTempLow;
+	    #AlarmErrorWord.%X14 := #SIG_SGFillTimeout;
+	    #AlarmErrorWord.%X15 := #SIG_ExhaustTimeout;
+	    
+	    #AlarmWarningWord.%X0 := #HMI_Sts_CycleRunning
+	    AND #DI_Door1_Open_PB;
+	    
+	    #AlarmWarningWord.%X1 := #HMI_Sts_CycleRunning
+	    AND #DI_Door2_Open_PB;
+	    
+	    #AlarmWarningWord.%X2 := #HMI_Cmd_Start
+	    AND ((NOT #DI_Door1_Closed)
+	    OR (NOT #DI_Door2_Closed));
+	    
+	    #AlarmWarningWord.%X3 := (#DI_Door1_Open_PB OR #DI_Door2_Open_PB)
+	    AND ((#HMI_ChamberPressure_01_PV < -0.15)
+	    OR (#HMI_ChamberPressure_01_PV > 0.15)
+	    OR (#HMI_ChamberPressure_02_PV < -0.15)
+	    OR (#HMI_ChamberPressure_02_PV > 0.15));
+	    
+	    #AlarmWarningWord.%X4 := #SIG_MaintenanceDue;
+	    #AlarmWarningWord.%X5 := #SIG_HMICommunicationFault;
+	    #AlarmWarningWord.%X6 := #SIG_PrinterFault;
+	    #AlarmWarningWord.%X7 := FALSE;
+	    #AlarmWarningWord.%X8 := FALSE;
+	    #AlarmWarningWord.%X9 := FALSE;
+	    #AlarmWarningWord.%X10 := FALSE;
+	    #AlarmWarningWord.%X11 := FALSE;
+	    #AlarmWarningWord.%X12 := FALSE;
+	    #AlarmWarningWord.%X13 := FALSE;
+	    #AlarmWarningWord.%X14 := FALSE;
+	    #AlarmWarningWord.%X15 := FALSE;
+	    
+	    #ErrorActive := #AlarmErrorWord.%X0
+	    OR #AlarmErrorWord.%X1
+	    OR #AlarmErrorWord.%X2
+	    OR #AlarmErrorWord.%X3
+	    OR #AlarmErrorWord.%X4
+	    OR #AlarmErrorWord.%X5
+	    OR #AlarmErrorWord.%X6
+	    OR #AlarmErrorWord.%X7
+	    OR #AlarmErrorWord.%X8
+	    OR #AlarmErrorWord.%X9
+	    OR #AlarmErrorWord.%X10
+	    OR #AlarmErrorWord.%X11
+	    OR #AlarmErrorWord.%X12
+	    OR #AlarmErrorWord.%X13
+	    OR #AlarmErrorWord.%X14
+	    OR #AlarmErrorWord.%X15;
+	    
+	    #WarningActive := #AlarmWarningWord.%X0
+	    OR #AlarmWarningWord.%X1
+	    OR #AlarmWarningWord.%X2
+	    OR #AlarmWarningWord.%X3
+	    OR #AlarmWarningWord.%X4
+	    OR #AlarmWarningWord.%X5
+	    OR #AlarmWarningWord.%X6;
+	    
+	    #AlarmActive := #ErrorActive OR #WarningActive;
+	    
+	    #AlarmAckWord.%X0 := #AlarmAckWord.%X0 AND #AlarmErrorWord.%X0;
+	    #AlarmAckWord.%X1 := #AlarmAckWord.%X1 AND #AlarmErrorWord.%X1;
+	    #AlarmAckWord.%X2 := #AlarmAckWord.%X2 AND #AlarmErrorWord.%X2;
+	    #AlarmAckWord.%X3 := #AlarmAckWord.%X3 AND #AlarmErrorWord.%X3;
+	    #AlarmAckWord.%X4 := #AlarmAckWord.%X4 AND #AlarmErrorWord.%X4;
+	    #AlarmAckWord.%X5 := #AlarmAckWord.%X5 AND #AlarmErrorWord.%X5;
+	    #AlarmAckWord.%X6 := #AlarmAckWord.%X6 AND #AlarmErrorWord.%X6;
+	    #AlarmAckWord.%X7 := #AlarmAckWord.%X7 AND #AlarmErrorWord.%X7;
+	    #AlarmAckWord.%X8 := #AlarmAckWord.%X8 AND #AlarmErrorWord.%X8;
+	    #AlarmAckWord.%X9 := #AlarmAckWord.%X9 AND #AlarmErrorWord.%X9;
+	    #AlarmAckWord.%X10 := #AlarmAckWord.%X10 AND #AlarmErrorWord.%X10;
+	    #AlarmAckWord.%X11 := #AlarmAckWord.%X11 AND #AlarmErrorWord.%X11;
+	    #AlarmAckWord.%X12 := #AlarmAckWord.%X12 AND #AlarmErrorWord.%X12;
+	    #AlarmAckWord.%X13 := #AlarmAckWord.%X13 AND #AlarmErrorWord.%X13;
+	    #AlarmAckWord.%X14 := #AlarmAckWord.%X14 AND #AlarmErrorWord.%X14;
+	    #AlarmAckWord.%X15 := #AlarmAckWord.%X15 AND #AlarmErrorWord.%X15;
+	    
+	    #UnackError :=
+	    (#AlarmErrorWord.%X0 AND NOT #AlarmAckWord.%X0)
+	    OR (#AlarmErrorWord.%X1 AND NOT #AlarmAckWord.%X1)
+	    OR (#AlarmErrorWord.%X2 AND NOT #AlarmAckWord.%X2)
+	    OR (#AlarmErrorWord.%X3 AND NOT #AlarmAckWord.%X3)
+	    OR (#AlarmErrorWord.%X4 AND NOT #AlarmAckWord.%X4)
+	    OR (#AlarmErrorWord.%X5 AND NOT #AlarmAckWord.%X5)
+	    OR (#AlarmErrorWord.%X6 AND NOT #AlarmAckWord.%X6)
+	    OR (#AlarmErrorWord.%X7 AND NOT #AlarmAckWord.%X7)
+	    OR (#AlarmErrorWord.%X8 AND NOT #AlarmAckWord.%X8)
+	    OR (#AlarmErrorWord.%X9 AND NOT #AlarmAckWord.%X9)
+	    OR (#AlarmErrorWord.%X10 AND NOT #AlarmAckWord.%X10)
+	    OR (#AlarmErrorWord.%X11 AND NOT #AlarmAckWord.%X11)
+	    OR (#AlarmErrorWord.%X12 AND NOT #AlarmAckWord.%X12)
+	    OR (#AlarmErrorWord.%X13 AND NOT #AlarmAckWord.%X13)
+	    OR (#AlarmErrorWord.%X14 AND NOT #AlarmAckWord.%X14)
+	    OR (#AlarmErrorWord.%X15 AND NOT #AlarmAckWord.%X15);
+	    
+	    #LampErrorRequest := #ErrorActive;
+	    #BuzzerRequest := #UnackError <> 0;
+	    
+END_FUNCTION_BLOCK
+

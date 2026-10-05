@@ -1,0 +1,661 @@
+﻿FUNCTION_BLOCK "FB_AutoCycle_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.3
+// AC200L process sequence, OB1 once per scan. All Q_Valve requests mean OPEN.
+// Only FC_OutputControl writes hardware DO. PID_Compact runs in cyclic OB.
+// CTAS10 = jacket pressure switch; gauge16 has NO electrical feedback.
+   VAR_INPUT 
+      StartAccepted : Bool;
+      AutoMode : Bool;
+      EStopOK : Bool;
+      PhaseOK : Bool;
+      ErrorActive : Bool;   //  Process-stopping errors only, not warnings
+      Door1Closed : Bool;
+      Door2Closed : Bool;
+      GasketPressHigh : Bool;
+      JacketPressHigh : Bool;   //  CTAS10, NEVER chamber pressure
+      AlarmErrorWord : Int;   //  Read existing Alarm diagnostics, bits X6..X9
+      Temperature_C : Real;
+      Pressure1_bar : Real;
+      Pressure2_bar : Real;
+      ProgramNumber : Int;   //  1..5 preset, 6 User
+      SP_Temp_C : Real;
+      SP_Sterilize_min : Int;
+      SP_DryEnable : Bool;
+      SP_Dry_min : Int;
+      PumpPermit : Bool;   //  overload + inlet pressure/temperature limits
+      Door1OpenPB : Bool;   //  DI_Door1_Open_PB
+      Door2OpenPB : Bool;   //  DI_Door2_Open_PB
+      GasketReleasedConfirmed : Bool;   //  proven depressurized; NOT NOT CTAS12
+      PIDPulse : Bool;   //  PID_Compact.Output_PWM, never connect directly to DO
+      PIDError : DWord;
+      Config : "UDT_AC200L_AutoConfig";
+   END_VAR
+
+   VAR_OUTPUT 
+      CycleRunning : Bool;
+      CycleActive : Bool;   //  door/mode lock through recovery and safe finish
+      CycleComplete : Bool;
+      ProcessStep : Int;   //  0 prep/idle,1 vacuum,2 heat,3 hold,4 exhaust,5 dry,6 balance
+      SubStep : Int;
+      ResultCode : Int;   //  0 none,1 complete,2 cancel,3 fault
+      FaultCode : Int;
+      ConfigValid : Bool;
+      StartRejected : Bool;
+      EndAcceptBlocked : Bool;
+      CompletedProgram : Int;
+      CompletedTimeSec : DInt;
+      RemainingTimeMin : DInt;
+      RemainingIsTimeout : Bool;
+      SterilizeElapsedSec : DInt;
+      DryElapsedSec : DInt;
+      TempMin_C : Real;
+      TempMax_C : Real;
+      TempExtremaValid : Bool;
+      TempLowActive : Bool;
+      VacuumFallbackUsed : Bool;
+      VacuumPulsesDone : Int;
+      ActiveTemp_C : Real;
+      ActiveSterilize_min : Int;
+      ActiveDry_min : Int;
+      StartTime {InstructionName := 'DTL'; LibVersion := '1.0'} : DTL;
+      EndTime {InstructionName := 'DTL'; LibVersion := '1.0'} : DTL;
+      TimeStampsValid : Bool;
+      PIDEnable : Bool;
+      BuzzerRequest : Bool;
+      StopSGHeating : Bool;
+      DoorReleasePermitted : Bool;
+      Q_VacuumPump : Bool;
+      Q_PilotValve_01 : Bool;   //  jacket steam
+      Q_PilotValve_02 : Bool;   //  gasket supply
+      Q_PilotValve_03 : Bool;   //  chamber steam, PID
+      Q_PilotValve_04 : Bool;   //  HEPA
+      Q_PilotValve_05 : Bool;   //  SG drain, no automatic opening
+      Q_PilotValve_06 : Bool;   //  chamber vacuum/exhaust
+      Q_PilotValve_07 : Bool;   //  jacket drain
+      Q_PilotValve_08 : Bool;   //  gasket drain NC
+      Q_WaterInlet_01 : Bool;   //  HX cooling water
+      Q_WaterDrain : Bool;
+   END_VAR
+
+   VAR_IN_OUT 
+      AbortCmd : Bool;
+      PageRequest : Int;
+      EndAccepted : Bool;   //  End-screen close/return command, NOT alarm Ack
+   END_VAR
+
+   VAR 
+      Cfg : "UDT_AC200L_AutoConfig";
+      TotalTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      StageTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      GasketTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      JacketTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      JacketDrainTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      StableTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      TempLowTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      DryAcquireTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      BalanceTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      RecoveryIsolationTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      FinishTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      PreviousStep : Int;
+      PreviousTotalMs : DInt;
+      HoldMs : DInt;
+      DryMs : DInt;
+      PulsesRequired : Int;
+      PIDSwitched : Bool;
+      SealHeld : Bool;
+      SealReleasing : Bool;
+      BeepActive : Bool;
+      StartClockValid : Bool;
+      PreviousHoldQualified : Bool;
+      PreviousDryQualified : Bool;
+   END_VAR
+
+   VAR_TEMP 
+      SensorsOK : Bool;   //  derived from Alarm; NO raw checks in Auto
+      CommonOK : Bool;
+      PressureOK : Bool;
+      PressureSafe : Bool;
+      HoldQualified : Bool;
+      DryQualified : Bool;
+      HeatStable : Bool;
+      JacketDemand : Bool;
+      ChangedStep : Bool;
+      StagePT : Time;
+      TotalMs : DInt;
+      DeltaMs : DInt;
+      RemainingMs : DInt;
+      EventResult : Int;
+      NewFault : Int;
+      ClockStatus : Int;
+      ClockNow {InstructionName := 'DTL'; LibVersion := '1.0'} : DTL;
+   END_VAR
+
+
+BEGIN
+	// Alarm is the sole owner of raw sensor diagnostics.
+	// Use its specific bits so an unrelated cycle timeout does not prevent recovery.
+	#SensorsOK := NOT #AlarmErrorWord.%X6 AND NOT #AlarmErrorWord.%X7
+	AND NOT #AlarmErrorWord.%X8 AND NOT #AlarmErrorWord.%X9;
+	#CommonOK := #EStopOK AND #PhaseOK;
+	#PressureOK := #SensorsOK AND (ABS(#Pressure1_bar - #Pressure2_bar) <= 0.3);
+	#ConfigValid := (#Config.GasketTimeout > T#0ms)
+	AND (#Config.JacketTimeout > T#0ms) AND (#Config.ChargeTimeout > T#0ms)
+	AND (#Config.VacuumTimeout > T#0ms) AND (#Config.HeatTimeout > T#0ms)
+	AND (#Config.SterilizeStableTime > T#0ms)
+	AND (#Config.ExhaustTimeout > T#0ms) AND (#Config.BalanceTimeout > T#0ms)
+	AND (#Config.DryAcquireTimeout > T#0ms) AND (#Config.ValveSettleTime > T#0ms)
+	AND (#Config.JacketDrainTime > T#0ms) AND (#Config.TempLowTimeout > T#0ms)
+	AND (#Config.VacuumTarget_bar >= -1.0)
+	AND (#Config.VacuumTarget_bar < #Config.VacuumFallback_bar)
+	AND (#Config.VacuumFallback_bar < 0.0)
+	AND (#Config.ChargeTarget_bar > 0.0)
+	AND (#Config.DryTarget_bar >= -1.0) AND (#Config.DryTarget_bar < 0.0)
+	AND (#Config.PressureSafeBand_bar > 0.0) AND (#Config.PressureSafeBand_bar <= 0.15)
+	AND (#Config.ExhaustTarget_bar > 0.0) AND (#Config.ExhaustTarget_bar <= 0.15)
+	AND (#Config.SterilizePressureMin_bar > 0.0)
+	AND (#Config.SterilizePressureMax_bar > #Config.SterilizePressureMin_bar)
+	AND (#Config.PIDApproach_C > 0.0) AND (#Config.TempLowOffset_C > 0.0)
+	AND #Config.PIDConfigured AND #Config.RecoveryConfigured;
+	#PressureSafe := #PressureOK
+	AND (ABS(#Pressure1_bar) <= 0.15) AND (ABS(#Pressure2_bar) <= 0.15);
+	#StartRejected := FALSE;
+	#EndAcceptBlocked := FALSE;
+	#EventResult := 0;
+	#NewFault := 0;
+	
+	// Elapsed-ms delta is derived from a Siemens monotonic timer, not wall clock.
+	#TotalTimer(IN := #CycleActive,
+	            PT := T#24d);
+	#TotalMs := TIME_TO_DINT(#TotalTimer.ET);
+	#DeltaMs := #TotalMs - #PreviousTotalMs;
+	IF #DeltaMs < 0 THEN
+	    #DeltaMs := 0;
+	END_IF;
+	#PreviousTotalMs := #TotalMs;
+	
+	#ChangedStep := #SubStep <> #PreviousStep;
+	#PreviousStep := #SubStep;
+	#StagePT := T#24d;
+	CASE #SubStep OF
+	    11:
+	        #StagePT := #Cfg.VacuumTimeout;
+	    12, 14, 42, 60:
+	        #StagePT := #Cfg.ValveSettleTime;
+	    13:
+	        #StagePT := #Cfg.ChargeTimeout;
+	    20:
+	        #StagePT := #Cfg.HeatTimeout;
+	    40:
+	        #StagePT := #Cfg.ExhaustTimeout;
+	END_CASE;
+	#StageTimer(IN := #CycleRunning AND NOT #ChangedStep,
+	            PT := #StagePT);
+	
+	#JacketDemand := #CycleRunning
+	AND (((#SubStep = 20) AND NOT #PIDSwitched)
+	OR ((#SubStep = 50) OR (#SubStep = 51)))
+	AND NOT (#PIDSwitched AND NOT #JacketDrainTimer.Q);
+	#GasketTimer(IN := #CycleRunning AND #SealHeld AND NOT #GasketPressHigh,
+	             PT := #Cfg.GasketTimeout);
+	#JacketTimer(IN := #JacketDemand AND NOT #JacketPressHigh,
+	             PT := #Cfg.JacketTimeout);
+	// Latched event, independent of HMI step. Continues across heating/hold/exhaust.
+	#JacketDrainTimer(IN := #CycleActive AND #PIDSwitched AND (#ResultCode = 0),
+	                  PT := #Cfg.JacketDrainTime);
+	#HeatStable := #CycleRunning AND (#SubStep = 20) AND #PressureOK
+	AND #GasketPressHigh AND (#Temperature_C >= #ActiveTemp_C)
+	AND (#Pressure1_bar >= #Cfg.SterilizePressureMin_bar)
+	AND (#Pressure2_bar >= #Cfg.SterilizePressureMin_bar)
+	AND (#Pressure1_bar <= #Cfg.SterilizePressureMax_bar)
+	AND (#Pressure2_bar <= #Cfg.SterilizePressureMax_bar)
+	AND (#PIDError = DWORD#0);
+	#StableTimer(IN := #HeatStable,
+	             PT := #Cfg.SterilizeStableTime);
+	#TempLowActive := #CycleRunning AND (#SubStep = 30)
+	AND (#Temperature_C < (#ActiveTemp_C - #Cfg.TempLowOffset_C));
+	#TempLowTimer(IN := #TempLowActive,
+	              PT := #Cfg.TempLowTimeout);
+	#HoldQualified := #CycleRunning AND (#SubStep = 30) AND #PressureOK
+	AND #GasketPressHigh AND NOT #TempLowActive AND (#PIDError = DWORD#0)
+	AND (#Pressure1_bar >= #Cfg.SterilizePressureMin_bar)
+	AND (#Pressure2_bar >= #Cfg.SterilizePressureMin_bar)
+	AND (#Pressure1_bar <= #Cfg.SterilizePressureMax_bar)
+	AND (#Pressure2_bar <= #Cfg.SterilizePressureMax_bar);
+	#DryQualified := #CycleRunning AND (#SubStep = 51) AND #PressureOK
+	AND #PumpPermit AND #GasketPressHigh
+	AND (#Pressure1_bar <= #Cfg.DryTarget_bar)
+	AND (#Pressure2_bar <= #Cfg.DryTarget_bar);
+	#DryAcquireTimer(IN := #CycleRunning AND ((#SubStep = 50) OR (#SubStep = 51))
+	                 AND NOT (#PressureOK AND (#Pressure1_bar <= #Cfg.DryTarget_bar)
+	                 AND (#Pressure2_bar <= #Cfg.DryTarget_bar)),
+	                 PT := #Cfg.DryAcquireTimeout);
+	#BalanceTimer(IN := #CycleActive AND ((#SubStep = 61) OR (#SubStep = 90)),
+	              PT := #Cfg.BalanceTimeout);
+	#RecoveryIsolationTimer(IN := #CycleActive AND (#SubStep = 90),
+	                        PT := #Cfg.ValveSettleTime);
+	#FinishTimer(IN := #BeepActive,
+	             PT := T#5s);
+	
+	// Reset cycle timeout memory only after the end has been safely accepted.
+	// External errors remain authoritative. This command is not alarm Ack.
+	IF #EndAccepted THEN
+	    #EndAccepted := FALSE;
+	    IF NOT #CycleActive AND (#ResultCode <> 0) AND #PressureSafe
+	        AND #CommonOK THEN
+	        #FaultCode := 0;
+	        #StopSGHeating := FALSE;
+	    ELSE
+	        #EndAcceptBlocked := TRUE;
+	    END_IF;
+	END_IF;
+	
+	IF #CycleRunning THEN
+	    IF #TempExtremaValid AND (#SubStep = 30) AND #SensorsOK THEN
+	        IF #Temperature_C < #TempMin_C THEN
+	            #TempMin_C := #Temperature_C;
+	        END_IF;
+	        IF #Temperature_C > #TempMax_C THEN
+	            #TempMax_C := #Temperature_C;
+	        END_IF;
+	    END_IF;
+	    IF #HoldQualified AND #PreviousHoldQualified THEN
+	        #HoldMs := #HoldMs + #DeltaMs;
+	    END_IF;
+	    IF #DryQualified AND #PreviousDryQualified THEN
+	        #DryMs := #DryMs + #DeltaMs;
+	    END_IF;
+	    IF #ErrorActive OR NOT #CommonOK OR NOT #SensorsOK THEN
+	        #NewFault := 1;
+	    ELSIF NOT #AutoMode THEN
+	        #NewFault := 2;
+	    ELSIF ((#SubStep = 11) OR (#SubStep = 50) OR (#SubStep = 51))
+	        AND NOT #PumpPermit THEN
+	        #NewFault := 5;
+	    ELSIF NOT #Door1Closed OR NOT #Door2Closed THEN
+	        #NewFault := 3;
+	    ELSIF #GasketTimer.Q THEN
+	        #NewFault := 10;
+	    ELSIF #JacketTimer.Q THEN
+	        #NewFault := 11;
+	    ELSIF #PIDSwitched AND (#PIDError <> DWORD#0) THEN
+	        #NewFault := 12;
+	    ELSIF #TempLowTimer.Q THEN
+	        #NewFault := 13;
+	    ELSIF #DryAcquireTimer.Q THEN
+	        #NewFault := 14;
+	    ELSIF #TotalTimer.Q THEN
+	        #NewFault := 15;
+	    END_IF;
+	END_IF;
+	IF #NewFault <> 0 THEN
+	    #EventResult := 3;
+	ELSIF #AbortCmd AND #CycleRunning THEN
+	    #EventResult := 2;
+	END_IF;
+	
+	IF (#EventResult = 0) AND #CycleRunning AND #GasketPressHigh THEN
+	    CASE #SubStep OF
+	        10: // initial seal; no pump before CTAS12
+	            IF #GasketPressHigh THEN
+	                #SubStep := 11;
+	            END_IF;
+	        11: // vacuum pulse; evaluate CURRENT values of BOTH sensors
+	            IF #PressureOK AND (#Pressure1_bar <= #Cfg.VacuumTarget_bar)
+	                AND (#Pressure2_bar <= #Cfg.VacuumTarget_bar) THEN
+	                #SubStep := 12;
+	            ELSIF #StageTimer.Q THEN
+	                IF #Cfg.AllowVacuumFallback AND #PressureOK
+	                    AND (#Pressure1_bar <= #Cfg.VacuumFallback_bar)
+	                    AND (#Pressure2_bar <= #Cfg.VacuumFallback_bar) THEN
+	                    #VacuumFallbackUsed := TRUE;
+	                    #SubStep := 12;
+	                ELSE
+	                    #NewFault := 20;
+	                END_IF;
+	            END_IF;
+	        12:
+	            IF #StageTimer.Q THEN
+	                #SubStep := 13;
+	            END_IF; // isolate suction
+	        13: // charge steam, count only completed vacuum+charge pairs
+	            IF #PressureOK AND (#Pressure1_bar >= #Cfg.ChargeTarget_bar)
+	                AND (#Pressure2_bar >= #Cfg.ChargeTarget_bar) THEN
+	                #VacuumPulsesDone := #VacuumPulsesDone + 1;
+	                IF #VacuumPulsesDone >= #PulsesRequired THEN
+	                    #SubStep := 20;
+	                ELSE
+	                    #SubStep := 14;
+	                END_IF;
+	            ELSIF #StageTimer.Q THEN
+	                #NewFault := 21;
+	            END_IF;
+	        14:
+	            IF #StageTimer.Q THEN
+	                #SubStep := 11;
+	            END_IF; // close steam before suction
+	        20:
+	            IF #Temperature_C >= (#ActiveTemp_C - #Cfg.PIDApproach_C) THEN
+	                #PIDSwitched := TRUE;
+	            END_IF;
+	            IF #StableTimer.Q THEN
+	                #SubStep := 30;
+	                #HoldMs := 0;
+	                #TempMin_C := #Temperature_C;
+	                #TempMax_C := #Temperature_C;
+	                #TempExtremaValid := TRUE;
+	            ELSIF #StageTimer.Q THEN
+	                #NewFault := 22;
+	            END_IF;
+	        30:
+	            IF #PressureOK AND ((#Pressure1_bar < #Cfg.SterilizePressureMin_bar)
+	                OR (#Pressure2_bar < #Cfg.SterilizePressureMin_bar)
+	                OR (#Pressure1_bar > #Cfg.SterilizePressureMax_bar)
+	                OR (#Pressure2_bar > #Cfg.SterilizePressureMax_bar)) THEN
+	                #NewFault := 23;
+	            ELSIF #HoldMs >= (INT_TO_DINT(#ActiveSterilize_min) * 60000) THEN
+	                #SubStep := 42;
+	            END_IF;
+	        42:
+	            IF #StageTimer.Q THEN
+	                #SubStep := 40;
+	            END_IF;
+	        40:
+	            IF #PressureOK AND (#Pressure1_bar < #Cfg.ExhaustTarget_bar)
+	                AND (#Pressure2_bar < #Cfg.ExhaustTarget_bar) THEN
+	                IF #ActiveDry_min > 0 THEN
+	                    // Never feed jacket while its drain task is still active.
+	                    IF #JacketDrainTimer.Q THEN
+	                        #SubStep := 50;
+	                    END_IF;
+	                ELSE
+	                    #SubStep := 60;
+	                END_IF;
+	            ELSIF #StageTimer.Q THEN
+	                #NewFault := 24;
+	            END_IF;
+	        50:
+	            IF #PressureOK AND #PumpPermit
+	                AND (#Pressure1_bar <= #Cfg.DryTarget_bar)
+	                AND (#Pressure2_bar <= #Cfg.DryTarget_bar) THEN
+	                #SubStep := 51;
+	            END_IF;
+	        51:
+	            IF #DryMs >= (INT_TO_DINT(#ActiveDry_min) * 60000) THEN
+	                #SubStep := 60;
+	            END_IF;
+	        60:
+	            IF #StageTimer.Q THEN
+	                #SubStep := 61;
+	            END_IF;
+	        61:
+	            IF #PressureOK AND (ABS(#Pressure1_bar) <= #Cfg.PressureSafeBand_bar)
+	                AND (ABS(#Pressure2_bar) <= #Cfg.PressureSafeBand_bar)
+	            THEN
+	                #EventResult := 1;
+	            ELSIF #BalanceTimer.Q THEN
+	                #NewFault := 25;
+	            END_IF;
+	        ELSE
+	            #NewFault := 99;
+	    END_CASE;
+	END_IF;
+	IF #NewFault <> 0 THEN
+	    #EventResult := 3;
+	END_IF;
+	
+	IF #EventResult <> 0 THEN
+	    #ResultCode := #EventResult;
+	    #FaultCode := #NewFault;
+	    #CycleRunning := FALSE;
+	    #CycleComplete := #EventResult = 1;
+	    #CompletedTimeSec := #TotalMs / 1000;
+	    #TimeStampsValid := FALSE;
+	    #ClockStatus := RD_LOC_T(OUT => #ClockNow);
+	    IF ((#ClockStatus = 0) OR (#ClockStatus = 1)) AND #StartClockValid THEN
+	        #EndTime := #ClockNow;
+	        #TimeStampsValid := TRUE;
+	    END_IF;
+	    #PageRequest := #Cfg.EndPage;
+	    #BeepActive := #EventResult = 1;
+	    IF #EventResult = 1 THEN
+	        #CycleActive := FALSE;
+	        #SubStep := 0;
+	    ELSE
+	        #StopSGHeating := TRUE;
+	        #SubStep := 90; // retain lock through pressure recovery
+	    END_IF;
+	END_IF;
+	
+	IF #CycleActive AND (#SubStep = 90) THEN
+	    IF #PressureSafe AND #CommonOK THEN
+	        #CycleActive := FALSE;
+	        #SubStep := 0;
+	    END_IF;
+	    // Recovery timeout never releases door or marks the cycle complete.
+	    IF #BalanceTimer.Q AND (#FaultCode = 0) THEN
+	        #FaultCode := 26;
+	    END_IF;
+	END_IF;
+	
+	IF #StartAccepted AND NOT #CycleActive AND (#EventResult = 0) AND NOT #AbortCmd THEN
+	    IF #ConfigValid AND #AutoMode AND #CommonOK AND NOT #ErrorActive
+	        AND #PressureSafe AND #Door1Closed AND #Door2Closed
+	        AND (#FaultCode = 0) AND NOT #SealReleasing
+	        AND (#ProgramNumber >= 1) AND (#ProgramNumber <= 6)
+	        AND (#SP_Temp_C >= 110.0) AND (#SP_Temp_C <= 134.0)
+	        AND (#SP_Sterilize_min >= 1) AND (#SP_Sterilize_min <= 99)
+	        AND (#SP_Dry_min >= 0) AND (#SP_Dry_min <= 99) THEN
+	        #Cfg := #Config; // freeze process configuration for the entire run
+	        #ActiveTemp_C := #SP_Temp_C;
+	        #ActiveSterilize_min := #SP_Sterilize_min;
+	        #ActiveDry_min := 0;
+	        IF #SP_DryEnable THEN
+	            #ActiveDry_min := #SP_Dry_min;
+	        END_IF;
+	        #CompletedProgram := #ProgramNumber;
+	        #PulsesRequired := 4;
+	        IF (#ProgramNumber = 1) OR (#ProgramNumber = 2) OR (#ProgramNumber = 5) THEN
+	            #PulsesRequired := 3;
+	        END_IF;
+	        #CycleRunning := TRUE;
+	        #CycleActive := TRUE;
+	        #CycleComplete := FALSE;
+	        #ResultCode := 0;
+	        #SubStep := 10;
+	        #SealHeld := TRUE;
+	        #PIDSwitched := FALSE;
+	        #VacuumFallbackUsed := FALSE;
+	        #VacuumPulsesDone := 0;
+	        #HoldMs := 0;
+	        #DryMs := 0;
+	        #PreviousTotalMs := 0;
+	        #PreviousHoldQualified := FALSE;
+	        #PreviousDryQualified := FALSE;
+	        #TempExtremaValid := FALSE;
+	        #TempMin_C := 0.0;
+	        #TempMax_C := 0.0;
+	        #CompletedTimeSec := 0;
+	        #TimeStampsValid := FALSE;
+	        #BeepActive := FALSE;
+	        #ClockStatus := RD_LOC_T(OUT => #ClockNow);
+	        #StartClockValid := (#ClockStatus = 0) OR (#ClockStatus = 1);
+	        IF #StartClockValid THEN
+	            #StartTime := #ClockNow;
+	        END_IF;
+	        #PageRequest := #Cfg.RunPage;
+	    ELSE
+	        #StartRejected := TRUE;
+	    END_IF;
+	END_IF;
+	#AbortCmd := FALSE;
+	#PreviousHoldQualified := #HoldQualified AND (#SubStep = 30) AND #CycleRunning;
+	#PreviousDryQualified := #DryQualified AND (#SubStep = 51) AND #CycleRunning;
+	
+	// Deterministic defaults. Electrical NO inversion belongs ONLY to OutputControl.
+	#Q_VacuumPump := FALSE;
+	#Q_PilotValve_01 := FALSE;
+	#Q_PilotValve_02 := FALSE;
+	#Q_PilotValve_03 := FALSE;
+	#Q_PilotValve_04 := FALSE;
+	#Q_PilotValve_05 := FALSE;
+	#Q_PilotValve_06 := FALSE;
+	#Q_PilotValve_07 := FALSE;
+	#Q_PilotValve_08 := FALSE;
+	#Q_WaterInlet_01 := FALSE;
+	#Q_WaterDrain := FALSE;
+	#PIDEnable := #CycleRunning AND #PIDSwitched AND #CommonOK AND #AutoMode
+	AND NOT #ErrorActive AND #SensorsOK AND ((#SubStep = 20) OR (#SubStep = 30));
+	IF #CycleRunning AND #CommonOK AND #AutoMode AND NOT #ErrorActive AND #SensorsOK THEN
+	    // Pause process actuation if seal pressure is not proven; recovery timeout still runs.
+	    #Q_PilotValve_02 := #SealHeld AND NOT #GasketPressHigh;
+	    IF #GasketPressHigh THEN
+	        CASE #SubStep OF
+	            11, 50, 51:
+	                #Q_PilotValve_06 := TRUE;
+	                #Q_VacuumPump := #PumpPermit;
+	                #Q_WaterInlet_01 := TRUE;
+	                #Q_WaterDrain := TRUE;
+	            13:
+	                #Q_PilotValve_03 := TRUE;
+	            20:
+	                #Q_PilotValve_03 := NOT #PIDSwitched OR (#PIDPulse AND (#PIDError = DWORD#0));
+	                #Q_PilotValve_01 := NOT #PIDSwitched AND NOT #JacketPressHigh;
+	            30:
+	                #Q_PilotValve_03 := #PIDPulse AND (#PIDError = DWORD#0);
+	            40:
+	                #Q_PilotValve_06 := TRUE;
+	                #Q_WaterInlet_01 := TRUE;
+	                #Q_WaterDrain := TRUE;
+	            61:
+	                IF #PressureOK THEN
+	                    IF (#Pressure1_bar > #Cfg.PressureSafeBand_bar)
+	                        OR (#Pressure2_bar > #Cfg.PressureSafeBand_bar) THEN
+	                        #Q_PilotValve_06 := TRUE;
+	                        #Q_WaterInlet_01 := TRUE;
+	                        #Q_WaterDrain := TRUE;
+	                    ELSIF (#Pressure1_bar < - #Cfg.PressureSafeBand_bar)
+	                        OR (#Pressure2_bar < - #Cfg.PressureSafeBand_bar) THEN
+	                        #Q_PilotValve_04 := TRUE;
+	                    END_IF;
+	                END_IF;
+	        END_CASE;
+	        IF #PIDSwitched AND NOT #JacketDrainTimer.Q AND (#SubStep <> 60) AND (#SubStep <> 61) THEN
+	            #Q_PilotValve_07 := TRUE;
+	            #Q_WaterInlet_01 := TRUE;
+	            #Q_WaterDrain := TRUE;
+	        END_IF;
+	        IF ((#SubStep = 50) OR (#SubStep = 51)) AND #JacketDrainTimer.Q THEN
+	            #Q_PilotValve_01 := NOT #JacketPressHigh;
+	        END_IF;
+	    END_IF;
+	END_IF;
+	IF (#SubStep = 90) AND #CycleActive AND #CommonOK AND #PressureOK
+	    AND #Cfg.RecoveryConfigured
+	    AND #RecoveryIsolationTimer.Q THEN
+	    IF (#Pressure1_bar > #Cfg.PressureSafeBand_bar)
+	        OR (#Pressure2_bar > #Cfg.PressureSafeBand_bar) THEN
+	        #Q_PilotValve_06 := TRUE;
+	        #Q_WaterInlet_01 := TRUE;
+	        #Q_WaterDrain := TRUE;
+	    ELSIF (#Pressure1_bar < - #Cfg.PressureSafeBand_bar)
+	        OR (#Pressure2_bar < - #Cfg.PressureSafeBand_bar) THEN
+	        #Q_PilotValve_04 := TRUE;
+	    END_IF;
+	END_IF;
+	
+	// Do not release the seal at cycle-end automatically. Explicit OPEN request only.
+	IF NOT #CycleActive AND (#Door1OpenPB OR #Door2OpenPB) AND #PressureSafe
+	    AND #CommonOK AND NOT #GasketReleasedConfirmed THEN
+	    #SealReleasing := TRUE;
+	    #SealHeld := FALSE;
+	END_IF;
+	IF #SealReleasing AND #CommonOK AND #PressureSafe THEN
+	    #Q_PilotValve_08 := NOT #GasketReleasedConfirmed;
+	    IF #GasketReleasedConfirmed THEN
+	        #SealReleasing := FALSE;
+	    END_IF;
+	END_IF;
+	#DoorReleasePermitted := NOT #CycleActive AND #PressureSafe
+	AND #GasketReleasedConfirmed AND #CommonOK;
+	// Maintain seal after COMPLETED until operator explicitly requests opening.
+	IF #SealHeld AND NOT #CycleActive AND (#ResultCode = 1) AND #CommonOK THEN
+	    #Q_PilotValve_02 := NOT #GasketPressHigh;
+	END_IF;
+	
+	#ProcessStep := 0;
+	CASE #SubStep OF
+	    11, 12, 13, 14:
+	        #ProcessStep := 1;
+	    20:
+	        #ProcessStep := 2;
+	    30:
+	        #ProcessStep := 3;
+	    40, 42:
+	        #ProcessStep := 4;
+	    50, 51:
+	        #ProcessStep := 5;
+	    60, 61, 90:
+	        #ProcessStep := 6;
+	END_CASE;
+	#RemainingMs := 0;
+	#RemainingIsTimeout := TRUE;
+	#StagePT := T#24d;
+	CASE #SubStep OF
+	    11:
+	        #StagePT := #Cfg.VacuumTimeout;
+	    12, 14, 42, 60:
+	        #StagePT := #Cfg.ValveSettleTime;
+	    13:
+	        #StagePT := #Cfg.ChargeTimeout;
+	    20:
+	        #StagePT := #Cfg.HeatTimeout;
+	    40:
+	        #StagePT := #Cfg.ExhaustTimeout;
+	END_CASE;
+	IF #CycleRunning THEN
+	    CASE #SubStep OF
+	        10:
+	            #RemainingMs := TIME_TO_DINT(#Cfg.GasketTimeout - #GasketTimer.ET);
+	        11, 12, 13, 14, 20, 40, 42, 60:
+	            #RemainingMs := TIME_TO_DINT(#StagePT - #StageTimer.ET);
+	        30:
+	            #RemainingMs := INT_TO_DINT(#ActiveSterilize_min) * 60000 - #HoldMs;
+	            #RemainingIsTimeout := FALSE;
+	        50:
+	            #RemainingMs := TIME_TO_DINT(#Cfg.DryAcquireTimeout - #DryAcquireTimer.ET);
+	        51:
+	            #RemainingMs := INT_TO_DINT(#ActiveDry_min) * 60000 - #DryMs;
+	            #RemainingIsTimeout := FALSE;
+	        61:
+	            #RemainingMs := TIME_TO_DINT(#Cfg.BalanceTimeout - #BalanceTimer.ET);
+	    END_CASE;
+	END_IF;
+	IF #CycleRunning AND (#SubStep <> #PreviousStep) THEN
+	    CASE #SubStep OF
+	        11, 12, 13, 14, 20, 40, 42, 60:
+	            #RemainingMs := TIME_TO_DINT(#StagePT);
+	        50:
+	            #RemainingMs := TIME_TO_DINT(#Cfg.DryAcquireTimeout);
+	        61:
+	            #RemainingMs := TIME_TO_DINT(#Cfg.BalanceTimeout);
+	    END_CASE;
+	END_IF;
+	IF #RemainingMs < 0 THEN
+	    #RemainingMs := 0;
+	END_IF;
+	#RemainingTimeMin := #RemainingMs / 60000;
+	IF (#RemainingMs MOD 60000) > 0 THEN
+	    #RemainingTimeMin := #RemainingTimeMin + 1;
+	END_IF;
+	#SterilizeElapsedSec := #HoldMs / 1000;
+	#DryElapsedSec := #DryMs / 1000;
+	IF #FinishTimer.Q THEN
+	    #BeepActive := FALSE;
+	END_IF;
+	#BuzzerRequest := #BeepActive AND NOT #ErrorActive
+	AND ((#FinishTimer.ET < T#1s)
+	OR ((#FinishTimer.ET >= T#2s) AND (#FinishTimer.ET < T#3s))
+	OR ((#FinishTimer.ET >= T#4s) AND (#FinishTimer.ET < T#5s)));
+END_FUNCTION_BLOCK
+

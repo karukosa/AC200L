@@ -1,0 +1,270 @@
+﻿FUNCTION_BLOCK "FB_AutoCycle_Demo"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+// AC200L: timed HMI/PLC cycle demo only. No process actuator is commanded.
+// Call once per OB1 scan, AFTER FB_StartPrecheck and BEFORE FC_OutputControl.
+// OB1 connections (symbol names from the supplied PLC tag tables):
+//   StartAccepted     := "AUTO_Cmd_Start" (FB_StartPrecheck.StartAccepted)
+//   AbortCmd          := "HMI_Cmd_Abort"       [InOut]
+//   ProgramNumber     := "HMI_ProgramNumber"
+//   CycleRunning      => "HMI_Sts_CycleRunning"
+//   CycleComplete     => "HMI_Sts_CycleComplete"
+//   ProcessStep       => "HMI_ProcessStep"
+//   RemainingTimeMin  => "HMI_RemainingTime_Sec" (existing DInt tag)
+//   PageRequest       := "HMI_PageRequest"     [InOut]
+//   BuzzerRequest     => "AUTO_Q_Buzzer"
+// HMI_RemainingTime_Sec is a legacy name. It now carries whole MINUTES
+// (ceil of the remaining seconds) for the washing-machine style display.
+// Do NOT enable HMI scaling; show zero decimal places and label the field min.
+// For clarity, rename this PLC/HMI tag to HMI_RemainingTime_Min later if desired.
+// Shared End screen: ResultCode, CompletedProgram, StartTime, EndTime.
+// ResultCode: 0=none, 1=complete, 2=cancelled by operator.
+// StartTime and EndTime are DTL snapshots of the PLC local clock.
+// Show dates only when TimeStampsValid is TRUE.
+// Text_list_step mapping: 0=Idle, 1=Vacuum, 2=Heating,
+// 3=Sterilization, 4=Exhaust, 5=Drying.
+// Keep FB_SGStartupFill in the current project. This FB does not touch its
+// existing FillRequest and HeatRequest outputs. Use PLCSIM for the cycle demo.
+// Keep the original alarm FB unchanged: it alone writes HMI_Sts_BuzzerRequest.
+// Existing FC_OutputControl ORs HMI_Sts_BuzzerRequest with AUTO_Q_Buzzer.
+   VAR_INPUT 
+      StartAccepted : Bool;
+      ProgramNumber : Int;
+      ErrorActive : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      CycleRunning : Bool;
+      CycleComplete : Bool;
+      ResultCode : Int;
+      ProcessStep : Int;
+      RemainingTimeMin : DInt;
+      CompletedProgram : Int;
+      CompletedTimeSec : DInt;
+      StartTime {InstructionName := 'DTL'; LibVersion := '1.0'} : DTL;
+      EndTime {InstructionName := 'DTL'; LibVersion := '1.0'} : DTL;
+      TimeStampsValid : Bool;
+      BuzzerRequest : Bool;
+   END_VAR
+
+   VAR_IN_OUT 
+      AbortCmd : Bool;
+      PageRequest : Int;
+   END_VAR
+
+   VAR 
+      Phase1Timer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      Phase2Timer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      Phase3Timer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      Phase4Timer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      Phase5Timer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      TotalTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      FinishTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+      BeepActive : Bool;
+      ActiveProgram : Int;
+      StartClockValid : Bool;
+   END_VAR
+
+   VAR_TEMP 
+      Phase1Enable : Bool;
+      Phase2Enable : Bool;
+      Phase3Enable : Bool;
+      Phase4Enable : Bool;
+      Phase5Enable : Bool;
+      Phase1Done : Bool;
+      Phase2Done : Bool;
+      Phase3Done : Bool;
+      Phase4Done : Bool;
+      Phase5Done : Bool;
+      FinishDone : Bool;
+      Phase1Elapsed : Time;
+      Phase2Elapsed : Time;
+      Phase3Elapsed : Time;
+      Phase4Elapsed : Time;
+      Phase5Elapsed : Time;
+      TotalElapsed : Time;
+      BeepElapsed : Time;
+      RemainingMs : DInt;
+      ClockNow {InstructionName := 'DTL'; LibVersion := '1.0'} : DTL;
+      ClockStatus : Int;
+   END_VAR
+
+
+BEGIN
+	    // Call all timer instances on every scan. Inactive phases reset.
+	    #Phase1Enable := #CycleRunning AND (#ProcessStep = 1);
+	    #Phase2Enable := #CycleRunning AND (#ProcessStep = 2);
+	    #Phase3Enable := #CycleRunning AND (#ProcessStep = 3);
+	    #Phase4Enable := #CycleRunning AND (#ProcessStep = 4);
+	    #Phase5Enable := #CycleRunning AND (#ProcessStep = 5);
+	    
+	    #Phase1Timer(IN := #Phase1Enable,
+	                 PT := T#5s,
+	                 Q => #Phase1Done,
+	                 ET => #Phase1Elapsed);
+	    #Phase2Timer(IN := #Phase2Enable,
+	                 PT := T#5s,
+	                 Q => #Phase2Done,
+	                 ET => #Phase2Elapsed);
+	    #Phase3Timer(IN := #Phase3Enable,
+	                 PT := T#5s,
+	                 Q => #Phase3Done,
+	                 ET => #Phase3Elapsed);
+	    #Phase4Timer(IN := #Phase4Enable,
+	                 PT := T#5s,
+	                 Q => #Phase4Done,
+	                 ET => #Phase4Elapsed);
+	    #Phase5Timer(IN := #Phase5Enable,
+	                 PT := T#5s,
+	                 Q => #Phase5Done,
+	                 ET => #Phase5Elapsed);
+	    #TotalTimer(IN := #CycleRunning,
+	                PT := T#1h,
+	                ET => #TotalElapsed);
+	    #FinishTimer(IN := #BeepActive,
+	                 PT := T#5s,
+	                 Q => #FinishDone,
+	                 ET => #BeepElapsed);
+	    
+	    IF #ErrorActive AND #CycleRunning THEN
+	        #AbortCmd := FALSE;
+	        #CompletedProgram := #ActiveProgram;
+	        #CompletedTimeSec := TIME_TO_DINT(#TotalElapsed) / 1000;
+	        
+	        #TimeStampsValid := FALSE;
+	        #ClockStatus := RD_LOC_T(OUT => #ClockNow);
+	        
+	        IF ((#ClockStatus = 0) OR (#ClockStatus = 1))
+	            AND #StartClockValid THEN
+	            #EndTime := #ClockNow;
+	            #TimeStampsValid := TRUE;
+	        END_IF;
+	        
+	        #CycleRunning := FALSE;
+	        #CycleComplete := FALSE;
+	        #ResultCode := 3;       // Stopped due to error
+	        #ProcessStep := 0;
+	        #BeepActive := FALSE;    // Alarm block control buzzer
+	        #ActiveProgram := 0;
+	        #PageRequest := 15;     // End screen
+	    
+	    // Abort takes priority. The precheck block alone consumes HMI_Cmd_Start;
+	    // this block consumes only the confirmed HMI_Cmd_Abort command.
+	    ELSIF #AbortCmd THEN
+	        #AbortCmd := FALSE;
+	        IF #CycleRunning THEN
+	            // Save the interrupted cycle before resetting its running state.
+	            #CompletedProgram := #ActiveProgram;
+	            #CompletedTimeSec := TIME_TO_DINT(#TotalElapsed) / 1000;
+	            #TimeStampsValid := FALSE;
+	            #ClockStatus := RD_LOC_T(OUT => #ClockNow);
+	            IF ((#ClockStatus = 0) OR (#ClockStatus = 1)) AND #StartClockValid THEN
+	                #EndTime := #ClockNow;
+	                #TimeStampsValid := TRUE;
+	            END_IF;
+	            #CycleRunning := FALSE;
+	            #CycleComplete := FALSE;
+	            #ResultCode := 2;
+	            #ProcessStep := 0;
+	            #BeepActive := FALSE;
+	            #ActiveProgram := 0;
+	            #PageRequest := 15;
+	        END_IF;
+	        
+	    ELSIF #StartAccepted AND NOT #CycleRunning THEN
+	        #CycleRunning := TRUE;
+	        #CycleComplete := FALSE;
+	        #ResultCode := 0;
+	        #ProcessStep := 1;
+	        #CompletedProgram := 0;
+	        #CompletedTimeSec := 0;
+	        #StartClockValid := FALSE;
+	        #TimeStampsValid := FALSE;
+	        #BeepActive := FALSE;
+	        #ActiveProgram := #ProgramNumber;
+	        #ClockStatus := RD_LOC_T(OUT => #ClockNow);
+	        IF (#ClockStatus = 0) OR (#ClockStatus = 1) THEN
+	            #StartTime := #ClockNow;
+	            #StartClockValid := TRUE;
+	        END_IF;
+	        #PageRequest := 12;   // Existing running screen
+	        
+	    ELSIF #CycleRunning THEN
+	        CASE #ProcessStep OF
+	            1:  // Vacuum (display only)
+	                IF #Phase1Done THEN
+	                    #ProcessStep := 2;
+	                END_IF;
+	            2:  // Heating (display only)
+	                IF #Phase2Done THEN
+	                    #ProcessStep := 3;
+	                END_IF;
+	            3:  // Sterilization (display only)
+	                IF #Phase3Done THEN
+	                    #ProcessStep := 4;
+	                END_IF;
+	            4:  // Exhaust (display only)
+	                IF #Phase4Done THEN
+	                    #ProcessStep := 5;
+	                END_IF;
+	            5:  // Drying (display only)
+	                IF #Phase5Done THEN
+	                    #CompletedProgram := #ActiveProgram;
+	                    #CompletedTimeSec := TIME_TO_DINT(#TotalElapsed) / 1000;
+	                    #ClockStatus := RD_LOC_T(OUT => #ClockNow);
+	                    IF ((#ClockStatus = 0) OR (#ClockStatus = 1)) AND #StartClockValid THEN
+	                        #EndTime := #ClockNow;
+	                        #TimeStampsValid := TRUE;
+	                    END_IF;
+	                    #CycleRunning := FALSE;
+	                    #CycleComplete := TRUE;
+	                    #ResultCode := 1;
+	                    #ProcessStep := 0;
+	                    #BeepActive := TRUE;
+	                    #PageRequest := 15;  // Configure completion screen as ID 15
+	                END_IF;
+	            ELSE
+	                // An unexpected step is treated as an abort, never completion.
+	                #CycleRunning := FALSE;
+	                #CycleComplete := FALSE;
+	                #ResultCode := 0;
+	                #ProcessStep := 0;
+	                #BeepActive := FALSE;
+	                #TimeStampsValid := FALSE;
+	                #PageRequest := 15;
+	        END_CASE;
+	    END_IF;
+	    
+	    // Calculate the remaining time of the CURRENT step after the state
+	    // transition, so the display immediately shows 1 min for the new step.
+	    #RemainingMs := 0;
+	    IF #CycleRunning THEN
+	        CASE #ProcessStep OF
+	            1:
+	                #RemainingMs := 5000 - TIME_TO_DINT(#Phase1Elapsed);
+	            2:
+	                #RemainingMs := 5000 - TIME_TO_DINT(#Phase2Elapsed);
+	            3:
+	                #RemainingMs := 5000 - TIME_TO_DINT(#Phase3Elapsed);
+	            4:
+	                #RemainingMs := 5000 - TIME_TO_DINT(#Phase4Elapsed);
+	            5:
+	                #RemainingMs := 5000 - TIME_TO_DINT(#Phase5Elapsed);
+	        END_CASE;
+	    END_IF;
+	    IF #RemainingMs < 0 THEN
+	        #RemainingMs := 0;
+	    END_IF;
+	    // 1..60000 ms = 1 min; 60001..120000 ms = 2 min; zero = 0 min.
+	    #RemainingTimeMin := (#RemainingMs + 59999) / 60000;
+	    
+	    // ON: [0,1), [2,3), [4,5) s. OFF: [1,2), [3,4) s and after 5 s.
+	    IF #FinishDone THEN
+	        #BeepActive := FALSE;
+	    END_IF;
+	    #BuzzerRequest := #BeepActive AND NOT #AbortCmd AND
+	    ((#BeepElapsed < T#1s) OR
+	    ((#BeepElapsed >= T#2s) AND (#BeepElapsed < T#3s)) OR
+	    ((#BeepElapsed >= T#4s) AND (#BeepElapsed < T#5s)));
+END_FUNCTION_BLOCK
+

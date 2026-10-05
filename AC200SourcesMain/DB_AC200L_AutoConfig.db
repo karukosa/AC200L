@@ -1,0 +1,12 @@
+﻿DATA_BLOCK "DB_AC200L_AutoConfig"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.0
+   VAR 
+      Settings : "UDT_AC200L_AutoConfig";
+   END_VAR
+
+
+BEGIN
+
+END_DATA_BLOCK
+

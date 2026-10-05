@@ -1,0 +1,54 @@
+﻿FUNCTION_BLOCK "FB_AnalogScale"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      Pressure01_Raw : Int;
+      Pressure02_Raw : Int;
+      Temperature_Raw : Int;
+      TempAt0V_C : Real;
+      TempAt10V_C : Real;
+   END_VAR
+
+   VAR_OUTPUT 
+      Pressure01_bar : Real;
+      Pressure02_bar : Real;
+      PressureAvg_bar : Real;
+      Temperature_C : Real;
+      PressureMismatchFault : Bool;
+      PressuresAgree : Bool;
+      BothNearZero : Bool;
+   END_VAR
+
+   VAR 
+      DiffTimer {InstructionName := 'TON_TIME'; LibVersion := '1.0'} : TON_TIME;
+   END_VAR
+
+   VAR_TEMP 
+      Mismatch : Bool;
+   END_VAR
+
+
+BEGIN
+	    // Scale two 4-20 mA pressure transmitters, -1 to +5 bar.
+	    #Pressure01_bar := -1.0 + INT_TO_REAL(#Pressure01_Raw) * 6.0 / 27648.0;
+	    #Pressure02_bar := -1.0 + INT_TO_REAL(#Pressure02_Raw) * 6.0 / 27648.0;
+	    #PressureAvg_bar := (#Pressure01_bar + #Pressure02_bar) / 2.0;
+	    
+	    // PT100 transmitter: 0 V = TempAt0V_C; 10 V = TempAt10V_C.
+	    #Temperature_C := #TempAt0V_C + INT_TO_REAL(#Temperature_Raw)
+	    * (#TempAt10V_C - #TempAt0V_C) / 27648.0;
+	    
+	    // The existing alarm block checks raw sensor faults separately.
+	    #Mismatch := ABS(#Pressure01_bar - #Pressure02_bar) > 0.3;
+	    #DiffTimer(IN := #Mismatch,
+	               PT := T#10s);
+	    #PressureMismatchFault := #DiffTimer.Q;
+	    #PressuresAgree := NOT #Mismatch;
+	    
+	    // This is only a pressure condition; also require no sensor faults
+	    // and the remaining door interlocks in the output control block.
+	    #BothNearZero := #PressuresAgree
+	    AND (#Pressure01_bar > -0.1) AND (#Pressure01_bar < 0.1)
+	    AND (#Pressure02_bar > -0.1) AND (#Pressure02_bar < 0.1);
+END_FUNCTION_BLOCK
+

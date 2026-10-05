@@ -1,0 +1,10 @@
+﻿DATA_BLOCK "FB_DoorControl_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.2
+NON_RETAIN
+"FB_DoorControl"
+
+BEGIN
+
+END_DATA_BLOCK
+
